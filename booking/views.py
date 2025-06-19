@@ -3,13 +3,22 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework.views import APIView
 from django.contrib.auth.models import User
-from django.contrib.auth import authenticate
+from django.contrib.auth import login, authenticate, logout
 from .models import Train, Booking
 from .serializers import TrainSerializer, BookingSerializer
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django_filters.rest_framework import DjangoFilterBackend
 
+from django.views import View
+from django.views.generic import TemplateView, ListView, FormView
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth.decorators import login_required
+from django.utils.decorators import method_decorator
+from django.contrib import messages
+from .forms import RegisterForm, LoginForm, BookingForm
 
+
+# DRF API Views
 class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     permission_classes = [permissions.AllowAny]
@@ -70,3 +79,110 @@ class BookingViewSet(viewsets.ModelViewSet):
         if booking.user != request.user:
             return Response({'error': 'You can only cancel your own bookings.'}, status=403)
         return super().destroy(request, *args, **kwargs)
+
+
+# Template-based Views
+class RegisterUserView(FormView):
+    template_name = 'booking/register.html'
+    form_class = RegisterForm
+
+    def form_valid(self, form):
+        user = form.save(commit=False)
+        user.set_password(form.cleaned_data['password'])
+        user.save()
+        login(self.request, user)
+        messages.success(self.request, "Registration successful.")
+        return redirect('train_list')
+
+
+class LoginUserView(FormView):
+    template_name = 'booking/login.html'
+    form_class = LoginForm
+
+    def form_valid(self, form):
+        user = authenticate(
+            username=form.cleaned_data['username'],
+            password=form.cleaned_data['password']
+        )
+        if user is not None:
+            login(self.request, user)
+            messages.success(self.request, f"Welcome, {user.username}!")
+            return redirect('train_list')
+        form.add_error(None, "Invalid username or password")
+        return self.form_invalid(form)
+
+
+@login_required
+def logout_user(request):
+    logout(request)
+    messages.info(request, "You have been logged out.")
+    return redirect('login')
+
+
+@method_decorator(login_required, name='dispatch')
+class TrainListView(ListView):
+    model = Train
+    template_name = 'booking/train_list.html'
+    context_object_name = 'trains'
+
+    def get_queryset(self):
+        qs = Train.objects.all()
+        source = self.request.GET.get('source')
+        dest = self.request.GET.get('destination')
+        date = self.request.GET.get('departure_time')
+
+        if source:
+            qs = qs.filter(source__icontains=source)
+        if dest:
+            qs = qs.filter(destination__icontains=dest)
+        if date:
+            qs = qs.filter(departure_time__date=date)
+        return qs
+
+
+@method_decorator(login_required, name='dispatch')
+class TrainDetailView(View):
+    def get(self, request, pk):
+        train = get_object_or_404(Train, pk=pk)
+        form = BookingForm()
+        return render(request, 'booking/train_detail.html', {'train': train, 'form': form})
+
+    def post(self, request, pk):
+        train = get_object_or_404(Train, pk=pk)
+        form = BookingForm(request.POST)
+        if form.is_valid():
+            seat = form.cleaned_data['seat_number']
+            if seat > train.total_seats:
+                form.add_error('seat_number', 'Seat number exceeds train capacity')
+            elif seat > train.seats_available:
+                form.add_error('seat_number', 'Not enough seats available')
+            elif Booking.objects.filter(train=train, seat_number=seat).exists():
+                form.add_error('seat_number', f"Seat {seat} is already booked.")
+            else:
+                Booking.objects.create(user=request.user, train=train, seat_number=seat)
+                train.seats_available -= 1
+                train.save()
+                messages.success(request, f"Seat {seat} booked successfully.")
+                return redirect('my_bookings')
+        return render(request, 'booking/train_detail.html', {'train': train, 'form': form})
+
+
+@method_decorator(login_required, name='dispatch')
+class MyBookingsView(TemplateView):
+    template_name = 'booking/my_bookings.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['bookings'] = Booking.objects.filter(user=self.request.user)
+        return context
+
+
+@login_required
+def cancel_booking(request, pk):
+    booking = get_object_or_404(Booking, pk=pk, user=request.user)
+    train = booking.train
+    train.seats_available += 1
+    train.save()
+    booking.delete()
+    messages.success(request, f"Canceled booking for seat {booking.seat_number} on {train.name}.")
+    return redirect('my_bookings')

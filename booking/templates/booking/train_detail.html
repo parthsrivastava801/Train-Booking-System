@@ -1,0 +1,14 @@
+{% extends 'booking/base.html' %}
+{% block content %}
+<h2>{{ train.name }}</h2>
+<p><b>Route:</b> {{ train.source }} to {{ train.destination }}</p>
+<p><b>Departure:</b> {{ train.departure_time }}</p>
+<p><b>Available Seats:</b> {{ train.seats_available }}</p>
+
+<h3>Book a seat</h3>
+<form method="post">
+    {% csrf_token %}
+    Seat Number: <input type="number" name="seat_number" min="1" max="{{ train.total_seats }}">
+    <button type="submit">Book</button>
+</form>
+{% endblock %}
