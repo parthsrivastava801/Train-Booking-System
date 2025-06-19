@@ -144,27 +144,40 @@ class TrainListView(ListView):
 class TrainDetailView(View):
     def get(self, request, pk):
         train = get_object_or_404(Train, pk=pk)
-        form = BookingForm()
-        return render(request, 'booking/train_detail.html', {'train': train, 'form': form})
+        booked_seats = Booking.objects.filter(train=train).values_list('seat_number', flat=True)
+        all_seats = list(range(1, train.total_seats + 1))
+        available_seats = [seat for seat in all_seats if seat not in booked_seats]
+        form = BookingForm(available_seats=available_seats)
+        return render(request, 'booking/train_detail.html', {
+            'train': train,
+            'form': form,
+            'available_seats': available_seats,
+            'booked_seats': booked_seats
+        })
 
     def post(self, request, pk):
         train = get_object_or_404(Train, pk=pk)
-        form = BookingForm(request.POST)
+        booked_seats = Booking.objects.filter(train=train).values_list('seat_number', flat=True)
+        all_seats = list(range(1, train.total_seats + 1))
+        available_seats = [seat for seat in all_seats if seat not in booked_seats]
+        form = BookingForm(request.POST, available_seats=available_seats)
+
         if form.is_valid():
-            seat = form.cleaned_data['seat_number']
-            if seat > train.total_seats:
-                form.add_error('seat_number', 'Seat number exceeds train capacity')
-            elif seat > train.seats_available:
-                form.add_error('seat_number', 'Not enough seats available')
-            elif Booking.objects.filter(train=train, seat_number=seat).exists():
-                form.add_error('seat_number', f"Seat {seat} is already booked.")
+            seat = int(form.cleaned_data['seat_number'])
+
+            if seat not in available_seats:
+                form.add_error('seat_number', 'Seat already booked.')
             else:
                 Booking.objects.create(user=request.user, train=train, seat_number=seat)
-                train.seats_available -= 1
-                train.save()
-                messages.success(request, f"Seat {seat} booked successfully.")
+                messages.success(request, f"Successfully booked seat {seat} on {train.name}")
                 return redirect('my_bookings')
-        return render(request, 'booking/train_detail.html', {'train': train, 'form': form})
+
+        return render(request, 'booking/train_detail.html', {
+            'train': train,
+            'form': form,
+            'available_seats': available_seats,
+            'booked_seats': booked_seats
+        })
 
 
 @method_decorator(login_required, name='dispatch')
@@ -181,8 +194,6 @@ class MyBookingsView(TemplateView):
 def cancel_booking(request, pk):
     booking = get_object_or_404(Booking, pk=pk, user=request.user)
     train = booking.train
-    train.seats_available += 1
-    train.save()
     booking.delete()
     messages.success(request, f"Canceled booking for seat {booking.seat_number} on {train.name}.")
     return redirect('my_bookings')

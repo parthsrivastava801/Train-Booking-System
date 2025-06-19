@@ -7,6 +7,9 @@ class TrainSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+from rest_framework import serializers
+from .models import Booking, Train
+
 class BookingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Booking
@@ -17,23 +20,12 @@ class BookingSerializer(serializers.ModelSerializer):
         train = data['train']
         seat_number = data['seat_number']
 
-        if seat_number > train.total_seats:
-            raise serializers.ValidationError("Seat number exceeds total seats on the train.")
+        # Check if seat number is within valid range
+        if seat_number < 1 or seat_number > train.total_seats:
+            raise serializers.ValidationError(f"Seat number must be between 1 and {train.total_seats}.")
 
-        # Check if seat is already booked for this train
+        # Check if seat is already booked
         if Booking.objects.filter(train=train, seat_number=seat_number).exists():
             raise serializers.ValidationError(f"Seat number {seat_number} is already booked for this train.")
 
-        if train.seats_available <= 0:
-            raise serializers.ValidationError("No seats available on this train.")
-
         return data
-
-    def create(self, validated_data):
-        train = validated_data['train']
-
-        # Decrement the available seats
-        train.seats_available -= 1
-        train.save()
-
-        return super().create(validated_data)
